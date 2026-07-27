@@ -1,6 +1,7 @@
 {
   "name": "data-bapenda",
   "type": "module",
+  "packageManager": "pnpm@11.14.0",
   "scripts": {
     "postinstall": "node scripts/copy-assets.mjs",
     "dev": "wrangler dev --remote",
