@@ -21,6 +21,15 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # .dev.vars is gitignored and only exists locally. wrangler types reads
+      # it to add DASHBOARD_USERNAME/DASHBOARD_PASSWORD to the generated Env
+      # type, and the test suite reads the same file for its own throwaway
+      # credentials — without it, both typecheck and the tests break in CI.
+      - name: Create .dev.vars for CI
+        run: |
+          echo "DASHBOARD_USERNAME=ci-admin" >> .dev.vars
+          echo "DASHBOARD_PASSWORD=ci-password" >> .dev.vars
+
       # worker-configuration.d.ts is gitignored (regenerated from
       # wrangler.jsonc) but test/tsconfig.json needs it for typed bindings.
       - name: Generate Cloudflare types
