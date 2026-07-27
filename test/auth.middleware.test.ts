@@ -16,10 +16,10 @@ function basicAuthHeader(username: string, password: string) {
 }
 
 describe('dashboardAuth', () => {
-  it('rejects requests with no credentials', async () => {
-    const res = await buildApp().request('/', {}, env)
-    expect(res.status).toBe(401)
-    expect(res.headers.get('WWW-Authenticate')).toContain('Basic')
+  it('redirects requests with no credentials to the landing page', async () => {
+    const res = await buildApp().request('/', { redirect: 'manual' }, env)
+    expect(res.status).toBe(302)
+    expect(res.headers.get('Location')).toBe('/')
   })
 
   it('rejects requests with the wrong password', async () => {
