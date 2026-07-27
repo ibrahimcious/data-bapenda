@@ -1,0 +1,73 @@
+:root {
+  /* Pico scales --pico-font-size up to 131.25% on wide viewports by default;
+     pin it so text doesn't balloon on large screens. */
+  --pico-font-size: 100%;
+}
+
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.dashboard-body {
+  display: flex;
+  flex: 1;
+}
+
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  padding: 1.5rem 1rem;
+  border-right: 1px solid var(--pico-muted-border-color);
+}
+
+.sidebar h3 {
+  margin-bottom: 1.5rem;
+}
+
+.sidebar nav ul {
+  list-style: none;
+  padding: 0;
+}
+
+.sidebar nav li {
+  margin-bottom: 0.5rem;
+}
+
+.dashboard-body main {
+  flex: 1;
+  padding: 1.5rem 2rem;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.toolbar input[type='search'] {
+  max-width: 320px;
+  margin-bottom: 0;
+}
+
+td.actions {
+  display: flex;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.dashboard-footer {
+  padding: 1rem 2rem;
+  border-top: 1px solid var(--pico-muted-border-color);
+  text-align: center;
+  color: var(--pico-muted-color);
+}
+
+.landing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  text-align: center;
+}

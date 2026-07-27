@@ -1,0 +1,23 @@
+{
+  "name": "data-bapenda",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/copy-assets.mjs",
+    "dev": "wrangler dev --remote",
+    "deploy": "wrangler deploy --minify",
+    "test": "vitest run",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+  },
+  "dependencies": {
+    "@picocss/pico": "^2.1.1",
+    "hono": "^4.12.32",
+    "htmx.org": "^2.0.10"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.8",
+    "@cloudflare/workers-types": "^5.20260724.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.110.0"
+  }
+}
