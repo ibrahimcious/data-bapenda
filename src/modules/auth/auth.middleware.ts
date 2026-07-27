@@ -4,12 +4,15 @@ import type { Bindings } from '../../bindings'
 
 export const dashboardAuth: MiddlewareHandler<{ Bindings: Bindings }> = async (c, next) => {
   // A 401 + WWW-Authenticate on a plain navigation makes the browser pop its
-  // native Basic Auth dialog instead of rendering our login page. Only send
-  // that challenge to requests that already carry credentials (the landing
-  // page's XHR-based login, or a browser that cached them from a prior
-  // request); a bare navigation with no header gets sent to the custom
-  // login page instead.
-  if (!c.req.header('Authorization')) {
+  // native Basic Auth dialog instead of rendering our login page, so a bare
+  // navigation with no credentials gets sent to the custom login page
+  // instead. But the landing page's login XHR *also* starts with no
+  // Authorization header on purpose — it relies on getting that same 401
+  // challenge back so the browser auto-retries with the credentials it was
+  // given. Sec-Fetch-Mode distinguishes the two: browsers set it to
+  // 'navigate' only for real page loads, never for XHR/fetch, so only
+  // navigations get redirected; the login XHR still reaches basicAuth below.
+  if (c.req.header('Sec-Fetch-Mode') === 'navigate' && !c.req.header('Authorization')) {
     return c.redirect('/')
   }
 
