@@ -7,12 +7,14 @@ import {
   listFiles,
   searchFiles,
   getFile,
+  getFileRecord,
   uploadFile,
   deleteFile,
-  renameFile,
+  updateFileMetadata,
   InvalidFileNameError,
-  FileExistsError,
+  InvalidCategoryError,
   FileNotFoundError,
+  type FileCategory,
 } from './files.service'
 import { DashboardPage, FileRow, FileEditRow, FileRows } from './files.view'
 
@@ -33,29 +35,29 @@ const requireHtmx: MiddlewareHandler<{ Bindings: Bindings }> = async (c, next) =
   await next()
 }
 
-function errorStatus(err: unknown): 404 | 409 | 500 {
+function errorStatus(err: unknown): 400 | 404 | 500 {
   if (err instanceof FileNotFoundError) return 404
-  if (err instanceof FileExistsError) return 409
+  if (err instanceof InvalidFileNameError || err instanceof InvalidCategoryError) return 400
   return 500
 }
 
 filesRoutes.get('/', async (c) => {
-  const files = await listFiles(c.env.FILES_BUCKET)
+  const files = await listFiles(c.env.DB, c.env.FILES_BUCKET)
   return c.html(<DashboardPage files={files} />)
 })
 
 filesRoutes.get('/search', async (c) => {
   const q = c.req.query('q') ?? ''
-  const files = await searchFiles(c.env.FILES_BUCKET, q)
+  const files = await searchFiles(c.env.DB, c.env.FILES_BUCKET, q)
   return c.html(<FileRows files={files} />)
 })
 
 filesRoutes.get('/download/:key', async (c) => {
   const key = c.req.param('key')
-  const obj = await getFile(c.env.FILES_BUCKET, key)
+  const [record, obj] = await Promise.all([getFileRecord(c.env.DB, key), getFile(c.env.FILES_BUCKET, key)])
   if (!obj) return c.notFound()
 
-  const filename = key.slice(key.lastIndexOf('/') + 1).replace(/"/g, '')
+  const filename = (record?.displayName ?? key.slice(key.lastIndexOf('/') + 1)).replace(/"/g, '')
   return new Response(obj.body, {
     headers: {
       'Content-Type': obj.httpMetadata?.contentType ?? 'application/octet-stream',
@@ -74,45 +76,62 @@ filesRoutes.post('/upload', requireHtmx, async (c) => {
     return c.text('Tidak ada file yang diunggah', 400)
   }
 
+  const category = String(body['category'] ?? '')
+  const description = String(body['description'] ?? '')
+
   try {
-    await uploadFile(c.env.FILES_BUCKET, file)
+    await uploadFile(c.env.DB, c.env.FILES_BUCKET, file, {
+      category,
+      description,
+      uploadedBy: c.env.DASHBOARD_USERNAME,
+    })
   } catch (err) {
-    const status = err instanceof InvalidFileNameError ? 400 : errorStatus(err)
-    return c.text(err instanceof Error ? err.message : 'Gagal mengunggah file', status)
+    return c.text(err instanceof Error ? err.message : 'Gagal mengunggah file', errorStatus(err))
   }
 
-  const files = await listFiles(c.env.FILES_BUCKET)
+  const files = await listFiles(c.env.DB, c.env.FILES_BUCKET)
   return c.html(<FileRows files={files} />)
 })
 
-filesRoutes.get('/files/:key/edit', (c) => {
+filesRoutes.get('/files/:key/edit', async (c) => {
   const key = c.req.param('key')
-  return c.html(<FileEditRow file={{ key }} />)
+  const file = await getFileRecord(c.env.DB, key)
+  if (!file) return c.notFound()
+  return c.html(<FileEditRow file={file} />)
 })
 
-filesRoutes.get('/files/:key', (c) => {
+filesRoutes.get('/files/:key', async (c) => {
   const key = c.req.param('key')
-  return c.html(<FileRow file={{ key }} />)
+  const file = await getFileRecord(c.env.DB, key)
+  if (!file) return c.notFound()
+  return c.html(<FileRow file={file} />)
 })
 
 filesRoutes.put('/files/:key', requireHtmx, async (c) => {
   const key = c.req.param('key')
   const body = await c.req.parseBody()
-  const newName = String(body['name'] ?? '').trim()
-  if (!newName) {
-    return c.html(<FileEditRow file={{ key }} error="Nama file tidak boleh kosong" />, 400)
-  }
+  const displayName = String(body['displayName'] ?? '')
+  const category = String(body['category'] ?? '')
+  const description = String(body['description'] ?? '')
 
   try {
-    const renamed = await renameFile(c.env.FILES_BUCKET, key, newName)
-    return c.html(<FileRow file={renamed} />)
+    const updated = await updateFileMetadata(c.env.DB, key, { displayName, category, description })
+    return c.html(<FileRow file={updated} />)
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Gagal mengganti nama file'
-    // Validation/collision errors re-render the edit row with the message.
-    // The client forces htmx to swap PUT responses regardless of status (see
-    // the beforeSwap listener in files.view.tsx) so this actually renders.
-    if (err instanceof InvalidFileNameError || err instanceof FileExistsError) {
-      return c.html(<FileEditRow file={{ key }} error={message} />, err instanceof FileExistsError ? 409 : 400)
+    const message = err instanceof Error ? err.message : 'Gagal menyimpan perubahan'
+    // Validation errors re-render the edit row with the message. The client
+    // forces htmx to swap PUT responses regardless of status (see the
+    // beforeSwap listener in files.view.tsx) so this actually renders.
+    if (err instanceof InvalidFileNameError || err instanceof InvalidCategoryError) {
+      const fallback = {
+        storageKey: key,
+        displayName,
+        category: category as FileCategory,
+        description,
+        uploadedAt: '',
+        uploadedBy: null,
+      }
+      return c.html(<FileEditRow file={fallback} error={message} />, 400)
     }
     return c.text(message, errorStatus(err))
   }
@@ -121,7 +140,7 @@ filesRoutes.put('/files/:key', requireHtmx, async (c) => {
 filesRoutes.delete('/files/:key', requireHtmx, async (c) => {
   const key = c.req.param('key')
   try {
-    await deleteFile(c.env.FILES_BUCKET, key)
+    await deleteFile(c.env.DB, c.env.FILES_BUCKET, key)
   } catch (err) {
     return c.text(err instanceof Error ? err.message : 'Gagal menghapus file', 500)
   }

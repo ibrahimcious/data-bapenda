@@ -4,6 +4,10 @@
   --pico-font-size: 100%;
 }
 
+[x-cloak] {
+  display: none !important;
+}
+
 .dashboard {
   display: flex;
   flex-direction: column;

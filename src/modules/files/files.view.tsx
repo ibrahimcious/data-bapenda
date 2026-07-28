@@ -1,19 +1,33 @@
 import type { FC } from 'hono/jsx'
 import { Layout } from '../../shared/layout'
-import { baseName, type FileEntry } from './files.service'
+import { FILE_CATEGORIES, type FileRecord } from './files.service'
 
-export const FileRow: FC<{ file: FileEntry }> = ({ file }) => (
+const CategoryBadge: FC<{ category: string }> = ({ category }) =>
+  category === 'Uncategorized' ? <mark title="Perlu dikategorikan">{category}</mark> : <span>{category}</span>
+
+export const FileRow: FC<{ file: FileRecord }> = ({ file }) => (
   <tr>
-    <td>{file.key}</td>
     <td>
-      <a href={`/dashboard/download/${encodeURIComponent(file.key)}`} role="button" class="outline">
+      {file.displayName}
+      {file.description && (
+        <>
+          <br />
+          <small>{file.description}</small>
+        </>
+      )}
+    </td>
+    <td>
+      <CategoryBadge category={file.category} />
+    </td>
+    <td>
+      <a href={`/dashboard/download/${encodeURIComponent(file.storageKey)}`} role="button" class="outline">
         Download
       </a>
     </td>
     <td class="actions">
       <button
         class="outline"
-        hx-get={`/dashboard/files/${encodeURIComponent(file.key)}/edit`}
+        hx-get={`/dashboard/files/${encodeURIComponent(file.storageKey)}/edit`}
         hx-target="closest tr"
         hx-swap="outerHTML"
       >
@@ -21,10 +35,10 @@ export const FileRow: FC<{ file: FileEntry }> = ({ file }) => (
       </button>
       <button
         class="outline contrast"
-        hx-delete={`/dashboard/files/${encodeURIComponent(file.key)}`}
+        hx-delete={`/dashboard/files/${encodeURIComponent(file.storageKey)}`}
         hx-target="closest tr"
         hx-swap="outerHTML"
-        hx-confirm={`Hapus ${file.key}?`}
+        hx-confirm={`Hapus ${file.displayName}?`}
       >
         Delete
       </button>
@@ -32,17 +46,34 @@ export const FileRow: FC<{ file: FileEntry }> = ({ file }) => (
   </tr>
 )
 
-export const FileEditRow: FC<{ file: FileEntry; error?: string }> = ({ file, error }) => (
+export const FileEditRow: FC<{ file: FileRecord; error?: string }> = ({ file, error }) => (
   <tr>
-    <td colspan={2}>
+    <td colspan={3}>
       <form
-        hx-put={`/dashboard/files/${encodeURIComponent(file.key)}`}
+        hx-put={`/dashboard/files/${encodeURIComponent(file.storageKey)}`}
         hx-target="closest tr"
         hx-swap="outerHTML"
         style={{ display: 'flex', flexDirection: 'column', gap: '.25rem', margin: 0 }}
       >
         <div style={{ display: 'flex', gap: '.5rem' }}>
-          <input type="text" name="name" value={baseName(file.key)} required autofocus style={{ margin: 0 }} />
+          <input type="text" name="displayName" value={file.displayName} required autofocus style={{ margin: 0 }} />
+          <select name="category" required style={{ margin: 0, width: 'auto' }}>
+            {file.category === 'Uncategorized' && (
+              <option value="Uncategorized" selected>
+                Uncategorized
+              </option>
+            )}
+            {FILE_CATEGORIES.map((category) => (
+              <option value={category} selected={category === file.category}>
+                {category}
+              </option>
+            ))}
+          </select>
+        </div>
+        <textarea name="description" placeholder="Deskripsi (opsional)" style={{ margin: 0 }}>
+          {file.description ?? ''}
+        </textarea>
+        <div>
           <button type="submit" style={{ width: 'auto' }}>
             Save
           </button>
@@ -53,7 +84,7 @@ export const FileEditRow: FC<{ file: FileEntry; error?: string }> = ({ file, err
     <td>
       <button
         class="outline"
-        hx-get={`/dashboard/files/${encodeURIComponent(file.key)}`}
+        hx-get={`/dashboard/files/${encodeURIComponent(file.storageKey)}`}
         hx-target="closest tr"
         hx-swap="outerHTML"
       >
@@ -63,7 +94,7 @@ export const FileEditRow: FC<{ file: FileEntry; error?: string }> = ({ file, err
   </tr>
 )
 
-export const FileRows: FC<{ files: FileEntry[] }> = ({ files }) => (
+export const FileRows: FC<{ files: FileRecord[] }> = ({ files }) => (
   <>
     {files.map((file) => (
       <FileRow file={file} />
@@ -80,12 +111,12 @@ const Sidebar: FC = () => (
           <a href="/dashboard">Home</a>
         </li>
         <li>
-          <a href="#" onclick="document.getElementById('upload-modal').showModal(); return false;">
+          <a href="#" {...{ 'x-on:click.prevent': '$refs.uploadModal.showModal()' }}>
             Upload
           </a>
         </li>
         <li>
-          <a href="/dashboard/logout" onclick="bapendaLogout(event); return false;">
+          <a href="/dashboard/logout" {...{ 'x-on:click.prevent': 'logout' }}>
             Logout
           </a>
         </li>
@@ -95,10 +126,10 @@ const Sidebar: FC = () => (
 )
 
 const UploadModal: FC = () => (
-  <dialog id="upload-modal">
+  <dialog x-ref="uploadModal">
     <article>
       <header>
-        <button aria-label="Close" rel="prev" onclick="document.getElementById('upload-modal').close()"></button>
+        <button aria-label="Close" rel="prev" x-on:click="$refs.uploadModal.close()"></button>
         <strong>Upload File</strong>
       </header>
       <form
@@ -107,61 +138,79 @@ const UploadModal: FC = () => (
         hx-target="#file-rows"
         hx-swap="innerHTML"
         hx-encoding="multipart/form-data"
+        {...{
+          'x-on:htmx:after-request.camel': 'onUploadAfterRequest($event)',
+          'x-on:htmx:response-error.camel': 'onUploadResponseError($event)',
+        }}
       >
         <input type="file" name="file" required />
+        <select name="category" required>
+          <option value="" disabled selected>
+            Pilih kategori...
+          </option>
+          {FILE_CATEGORIES.map((category) => (
+            <option value={category}>{category}</option>
+          ))}
+        </select>
+        <textarea name="description" placeholder="Deskripsi (opsional)"></textarea>
         <button type="submit">Upload</button>
-        <p id="upload-error" hidden style={{ color: 'var(--pico-del-color)' }}></p>
+        <p x-show="uploadError" x-cloak x-text="uploadError" style={{ color: 'var(--pico-del-color)' }}></p>
       </form>
     </article>
   </dialog>
 )
 
-const closeModalOnUploadScript = `
-document.body.addEventListener('htmx:afterRequest', function (evt) {
-  if (evt.detail.elt && evt.detail.elt.id === 'upload-form' && evt.detail.successful) {
-    evt.detail.elt.reset()
-    document.getElementById('upload-error').hidden = true
-    document.getElementById('upload-modal').close()
-  }
+const dashboardScript = `
+document.addEventListener('alpine:init', () => {
+  Alpine.data('dashboard', () => ({
+    uploadError: '',
+
+    onUploadAfterRequest(evt) {
+      if (evt.detail.elt && evt.detail.elt.id === 'upload-form' && evt.detail.successful) {
+        evt.detail.elt.reset()
+        this.uploadError = ''
+        this.$refs.uploadModal.close()
+      }
+    },
+
+    // htmx doesn't swap non-2xx responses into hx-target by default (so a
+    // rejected upload can't clobber the whole file table) — show the server's
+    // error message next to the form instead.
+    onUploadResponseError(evt) {
+      if (evt.detail.elt && evt.detail.elt.id === 'upload-form') {
+        this.uploadError = evt.detail.xhr.responseText || 'Gagal mengunggah file'
+      }
+    },
+
+    // A plain navigation to a URL that replies 401 makes the browser pop its
+    // native Basic Auth dialog and block on it instead of rendering the page.
+    // Doing the request in the background (with deliberately wrong credentials,
+    // which the browser won't prompt for since they're supplied programmatically)
+    // avoids that popup, and we redirect ourselves once it settles.
+    logout() {
+      var xhr = new XMLHttpRequest()
+      xhr.open('GET', '/dashboard/logout', true, 'logout', 'logout')
+      xhr.onloadend = function () {
+        window.location.href = '/'
+      }
+      xhr.send()
+    },
+  }))
 })
 
-// htmx doesn't swap non-2xx responses into hx-target by default (so a
-// rejected upload can't clobber the whole file table) — show the server's
-// error message next to the form instead.
-document.body.addEventListener('htmx:responseError', function (evt) {
-  if (evt.detail.elt && evt.detail.elt.id === 'upload-form') {
-    var errorEl = document.getElementById('upload-error')
-    errorEl.textContent = evt.detail.xhr.responseText || 'Gagal mengunggah file'
-    errorEl.hidden = false
-  }
-})
-
-// The rename form (PUT) returns a proper 400/409 with the edit row
-// re-rendered to show the validation/collision message, but htmx's default
-// is to not swap non-2xx responses at all. Force it to swap for PUT
-// specifically — upload/delete keep the safer default so a failed request
-// there can't blank out the table or vanish a row that's still present.
+// The edit form (PUT) returns a proper 400 with the edit row re-rendered to
+// show the validation message, but htmx's default is to not swap non-2xx
+// responses at all. Force it to swap for PUT specifically — upload/delete
+// keep the safer default so a failed request there can't blank out the table
+// or vanish a row that's still present. This is global htmx swap policy, not
+// per-component UI state, so it stays as plain htmx event wiring outside the
+// Alpine component above.
 document.body.addEventListener('htmx:beforeSwap', function (evt) {
   if (evt.detail.requestConfig && evt.detail.requestConfig.verb === 'put') {
     evt.detail.shouldSwap = true
     evt.detail.isError = false
   }
 })
-
-// A plain navigation to a URL that replies 401 makes the browser pop its
-// native Basic Auth dialog and block on it instead of rendering the page.
-// Doing the request in the background (with deliberately wrong credentials,
-// which the browser won't prompt for since they're supplied programmatically)
-// avoids that popup, and we redirect ourselves once it settles.
-function bapendaLogout(event) {
-  event.preventDefault()
-  var xhr = new XMLHttpRequest()
-  xhr.open('GET', '/dashboard/logout', true, 'logout', 'logout')
-  xhr.onloadend = function () {
-    window.location.href = '/'
-  }
-  xhr.send()
-}
 `
 
 const footerLines = [
@@ -179,9 +228,9 @@ const Footer: FC = () => (
   </footer>
 )
 
-export const DashboardPage: FC<{ files: FileEntry[] }> = ({ files }) => (
+export const DashboardPage: FC<{ files: FileRecord[] }> = ({ files }) => (
   <Layout title="Dashboard - Bapenda File Portal">
-    <div class="dashboard">
+    <div class="dashboard" x-data="dashboard">
       <div class="dashboard-body">
         <Sidebar />
         <main>
@@ -190,7 +239,7 @@ export const DashboardPage: FC<{ files: FileEntry[] }> = ({ files }) => (
             <input
               type="search"
               name="q"
-              placeholder="Cari nama file..."
+              placeholder="Cari nama, kategori, atau deskripsi..."
               hx-get="/dashboard/search"
               hx-trigger="input changed delay:300ms, search"
               hx-target="#file-rows"
@@ -201,6 +250,7 @@ export const DashboardPage: FC<{ files: FileEntry[] }> = ({ files }) => (
             <thead>
               <tr>
                 <th>Nama</th>
+                <th>Kategori</th>
                 <th>Unduh</th>
                 <th>Aksi</th>
               </tr>
@@ -213,7 +263,7 @@ export const DashboardPage: FC<{ files: FileEntry[] }> = ({ files }) => (
       </div>
       <Footer />
       <UploadModal />
-      <script dangerouslySetInnerHTML={{ __html: closeModalOnUploadScript }}></script>
+      <script dangerouslySetInnerHTML={{ __html: dashboardScript }}></script>
     </div>
   </Layout>
 )

@@ -1,13 +1,15 @@
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 import {
-  FileExistsError,
-  FileNotFoundError,
+  InvalidCategoryError,
   InvalidFileNameError,
+  FileNotFoundError,
   deleteFile,
+  getFileRecord,
   listFiles,
-  renameFile,
   searchFiles,
+  syncMissingFileRecords,
+  updateFileMetadata,
   uploadFile,
 } from '../src/modules/files/files.service'
 
@@ -15,99 +17,156 @@ function makeFile(name: string, content = 'hello'): File {
   return new File([content], name)
 }
 
-describe('listFiles / searchFiles', () => {
-  it('lists uploaded files and filters out folder markers', async () => {
-    await env.FILES_BUCKET.put('a.txt', 'a')
-    await env.FILES_BUCKET.put('folder/', '')
+describe('uploadFile / listFiles / searchFiles', () => {
+  it('uploads a file and lists it with the fields it was uploaded with', async () => {
+    const record = await uploadFile(env.DB, env.FILES_BUCKET, makeFile('new-file.txt'), {
+      category: 'Lainnya',
+      description: 'a test file',
+      uploadedBy: 'tester',
+    })
 
-    const files = await listFiles(env.FILES_BUCKET)
-    const keys = files.map((f) => f.key)
+    expect(record.displayName).toBe('new-file.txt')
+    expect(record.category).toBe('Lainnya')
+    expect(record.description).toBe('a test file')
+    expect(record.uploadedBy).toBe('tester')
+    expect(await env.FILES_BUCKET.get(record.storageKey)).not.toBeNull()
 
-    expect(keys).toContain('a.txt')
-    expect(keys).not.toContain('folder/')
+    const files = await listFiles(env.DB, env.FILES_BUCKET)
+    expect(files.map((f) => f.storageKey)).toContain(record.storageKey)
   })
 
-  it('returns every uploaded file (exercises the truncated/cursor loop)', async () => {
-    // Miniflare's R2 simulator doesn't actually cap list() at 1000 objects,
-    // so this can't force a real multi-page response — it just confirms the
-    // loop still returns everything when it only takes one page.
-    for (let i = 0; i < 5; i++) {
-      await env.FILES_BUCKET.put(`page-test-${i}.txt`, 'x')
-    }
+  it('generates a storage_key independent of the display name, so two files can share a display name', async () => {
+    const a = await uploadFile(env.DB, env.FILES_BUCKET, makeFile('dup.txt'), { category: 'Lainnya' })
+    const b = await uploadFile(env.DB, env.FILES_BUCKET, makeFile('dup.txt'), { category: 'Lainnya' })
 
-    const keys = (await listFiles(env.FILES_BUCKET)).map((f) => f.key)
-    for (let i = 0; i < 5; i++) {
-      expect(keys).toContain(`page-test-${i}.txt`)
-    }
-  })
-
-  it('search filters case-insensitively by substring', async () => {
-    await env.FILES_BUCKET.put('Report-2026.pdf', 'x')
-    const results = await searchFiles(env.FILES_BUCKET, 'report')
-    expect(results.map((f) => f.key)).toContain('Report-2026.pdf')
-  })
-
-  it('search with a blank query returns everything', async () => {
-    await env.FILES_BUCKET.put('anything.txt', 'x')
-    const results = await searchFiles(env.FILES_BUCKET, '   ')
-    expect(results.map((f) => f.key)).toContain('anything.txt')
-  })
-})
-
-describe('uploadFile', () => {
-  it('uploads a file under its own name', async () => {
-    await uploadFile(env.FILES_BUCKET, makeFile('new-file.txt'))
-    expect(await env.FILES_BUCKET.get('new-file.txt')).not.toBeNull()
+    expect(a.storageKey).not.toBe(b.storageKey)
+    expect(a.displayName).toBe('dup.txt')
+    expect(b.displayName).toBe('dup.txt')
   })
 
   it('rejects an empty file name', async () => {
-    await expect(uploadFile(env.FILES_BUCKET, makeFile('   '))).rejects.toThrow(InvalidFileNameError)
+    await expect(
+      uploadFile(env.DB, env.FILES_BUCKET, makeFile('   '), { category: 'Lainnya' }),
+    ).rejects.toThrow(InvalidFileNameError)
   })
 
-  it('rejects path-traversal-style file names', async () => {
-    await expect(uploadFile(env.FILES_BUCKET, makeFile('../evil.txt'))).rejects.toThrow(InvalidFileNameError)
+  it('rejects a category outside the fixed list', async () => {
+    await expect(
+      uploadFile(env.DB, env.FILES_BUCKET, makeFile('a.txt'), { category: 'Not A Real Category' }),
+    ).rejects.toThrow(InvalidCategoryError)
   })
 
-  it('rejects uploading over an existing key', async () => {
-    await env.FILES_BUCKET.put('dup.txt', 'first')
-    await expect(uploadFile(env.FILES_BUCKET, makeFile('dup.txt'))).rejects.toThrow(FileExistsError)
+  it('rejects "Uncategorized" as an upload-time category', async () => {
+    await expect(
+      uploadFile(env.DB, env.FILES_BUCKET, makeFile('a.txt'), { category: 'Uncategorized' }),
+    ).rejects.toThrow(InvalidCategoryError)
+  })
+
+  it('search matches by display name, category, or description', async () => {
+    const record = await uploadFile(env.DB, env.FILES_BUCKET, makeFile('Report-2026.pdf'), {
+      category: 'Laporan Potensi Pajak',
+      description: 'quarterly tax potential summary',
+    })
+
+    expect((await searchFiles(env.DB, env.FILES_BUCKET, 'report')).map((f) => f.storageKey)).toContain(
+      record.storageKey,
+    )
+    expect((await searchFiles(env.DB, env.FILES_BUCKET, 'Laporan Potensi')).map((f) => f.storageKey)).toContain(
+      record.storageKey,
+    )
+    expect((await searchFiles(env.DB, env.FILES_BUCKET, 'quarterly tax')).map((f) => f.storageKey)).toContain(
+      record.storageKey,
+    )
+  })
+
+  it('search with a blank query returns everything', async () => {
+    const record = await uploadFile(env.DB, env.FILES_BUCKET, makeFile('anything.txt'), { category: 'Lainnya' })
+    const results = await searchFiles(env.DB, env.FILES_BUCKET, '   ')
+    expect(results.map((f) => f.storageKey)).toContain(record.storageKey)
   })
 })
 
-describe('renameFile', () => {
-  it('renames a file, preserving its directory prefix', async () => {
-    await env.FILES_BUCKET.put('docs/original.txt', 'content')
-    const renamed = await renameFile(env.FILES_BUCKET, 'docs/original.txt', 'renamed.txt')
+describe('syncMissingFileRecords / backfill', () => {
+  it('backfills an R2 object with no matching D1 row as Uncategorized', async () => {
+    await env.FILES_BUCKET.put('orphaned/legacy-file.pdf', 'x')
 
-    expect(renamed.key).toBe('docs/renamed.txt')
-    expect(await env.FILES_BUCKET.get('docs/original.txt')).toBeNull()
-    expect(await env.FILES_BUCKET.get('docs/renamed.txt')).not.toBeNull()
+    const files = await listFiles(env.DB, env.FILES_BUCKET)
+    const backfilled = files.find((f) => f.storageKey === 'orphaned/legacy-file.pdf')
+
+    expect(backfilled).toBeDefined()
+    expect(backfilled?.displayName).toBe('legacy-file.pdf')
+    expect(backfilled?.category).toBe('Uncategorized')
   })
 
-  it('rejects renaming onto an existing file, leaving both untouched', async () => {
-    await env.FILES_BUCKET.put('one.txt', 'one')
-    await env.FILES_BUCKET.put('two.txt', 'two')
+  it('ignores folder marker keys', async () => {
+    await env.FILES_BUCKET.put('folder/', '')
+    await syncMissingFileRecords(env.DB, env.FILES_BUCKET)
 
-    await expect(renameFile(env.FILES_BUCKET, 'one.txt', 'two.txt')).rejects.toThrow(FileExistsError)
-    expect(await env.FILES_BUCKET.get('one.txt')).not.toBeNull()
-    expect(await env.FILES_BUCKET.get('two.txt')).not.toBeNull()
+    const record = await getFileRecord(env.DB, 'folder/')
+    expect(record).toBeNull()
   })
 
-  it('throws FileNotFoundError when the source key does not exist', async () => {
-    await expect(renameFile(env.FILES_BUCKET, 'missing.txt', 'new-name.txt')).rejects.toThrow(FileNotFoundError)
+  it('is idempotent — running twice does not duplicate rows', async () => {
+    await env.FILES_BUCKET.put('idempotent-test.txt', 'x')
+    await syncMissingFileRecords(env.DB, env.FILES_BUCKET)
+    await syncMissingFileRecords(env.DB, env.FILES_BUCKET)
+
+    const files = await listFiles(env.DB, env.FILES_BUCKET)
+    expect(files.filter((f) => f.storageKey === 'idempotent-test.txt')).toHaveLength(1)
+  })
+})
+
+describe('updateFileMetadata', () => {
+  it('updates display name, category, and description without touching the R2 object', async () => {
+    const uploaded = await uploadFile(env.DB, env.FILES_BUCKET, makeFile('before.txt'), { category: 'Lainnya' })
+    const objectBefore = await env.FILES_BUCKET.head(uploaded.storageKey)
+
+    const updated = await updateFileMetadata(env.DB, uploaded.storageKey, {
+      displayName: 'After.txt',
+      category: 'Data Kendaraan',
+      description: 'now described',
+    })
+
+    expect(updated.storageKey).toBe(uploaded.storageKey)
+    expect(updated.displayName).toBe('After.txt')
+    expect(updated.category).toBe('Data Kendaraan')
+    expect(updated.description).toBe('now described')
+
+    const objectAfter = await env.FILES_BUCKET.head(uploaded.storageKey)
+    expect(objectAfter?.etag).toBe(objectBefore?.etag)
   })
 
-  it('is a no-op when the new name matches the current name', async () => {
-    await env.FILES_BUCKET.put('same.txt', 'x')
-    const result = await renameFile(env.FILES_BUCKET, 'same.txt', 'same.txt')
-    expect(result.key).toBe('same.txt')
+  it('allows saving with category still Uncategorized', async () => {
+    await env.FILES_BUCKET.put('needs-review.txt', 'x')
+    await syncMissingFileRecords(env.DB, env.FILES_BUCKET)
+
+    const updated = await updateFileMetadata(env.DB, 'needs-review.txt', {
+      displayName: 'Needs Review.txt',
+      category: 'Uncategorized',
+    })
+    expect(updated.category).toBe('Uncategorized')
+  })
+
+  it('rejects an empty display name', async () => {
+    const uploaded = await uploadFile(env.DB, env.FILES_BUCKET, makeFile('a.txt'), { category: 'Lainnya' })
+    await expect(
+      updateFileMetadata(env.DB, uploaded.storageKey, { displayName: '   ', category: 'Lainnya' }),
+    ).rejects.toThrow(InvalidFileNameError)
+  })
+
+  it('throws FileNotFoundError for a storage key with no record', async () => {
+    await expect(
+      updateFileMetadata(env.DB, 'missing-key.txt', { displayName: 'x', category: 'Lainnya' }),
+    ).rejects.toThrow(FileNotFoundError)
   })
 })
 
 describe('deleteFile', () => {
-  it('deletes an existing file', async () => {
-    await env.FILES_BUCKET.put('to-delete.txt', 'x')
-    await deleteFile(env.FILES_BUCKET, 'to-delete.txt')
-    expect(await env.FILES_BUCKET.get('to-delete.txt')).toBeNull()
+  it('deletes both the R2 object and the D1 record', async () => {
+    const uploaded = await uploadFile(env.DB, env.FILES_BUCKET, makeFile('to-delete.txt'), { category: 'Lainnya' })
+    await deleteFile(env.DB, env.FILES_BUCKET, uploaded.storageKey)
+
+    expect(await env.FILES_BUCKET.get(uploaded.storageKey)).toBeNull()
+    expect(await getFileRecord(env.DB, uploaded.storageKey)).toBeNull()
   })
 })

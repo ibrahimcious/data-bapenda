@@ -18,6 +18,7 @@ node_modules/
 # generated (see scripts/copy-assets.mjs)
 public/assets/htmx.min.js
 public/assets/pico.min.css
+public/assets/alpine.min.js
 
 # generated (run `npm run cf-typegen` to regenerate)
 worker-configuration.d.ts

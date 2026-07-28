@@ -17,6 +17,7 @@ export const Layout: FC<PropsWithChildren<{ title?: string; metaRefresh?: string
         <link rel="stylesheet" href="/assets/pico.min.css" />
         <link rel="stylesheet" href="/assets/app.css" />
         <script src="/assets/htmx.min.js"></script>
+        <script src="/assets/alpine.min.js" defer></script>
       </head>
       <body>{children}</body>
     </html>
